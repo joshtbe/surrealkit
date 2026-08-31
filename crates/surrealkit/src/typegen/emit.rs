@@ -24,16 +24,24 @@ pub fn to_json(doc: &SchemaTypes, pretty: bool) -> Result<String> {
 /// surrealdb JS SDK (v2). Returns the full file contents.
 pub fn to_typescript(doc: &SchemaTypes) -> Result<String> {
 	let mut imports: BTreeSet<&'static str> = BTreeSet::new();
+	// Map of table names to their record Id types (as a string)
+	let mut record_types: BTreeMap<String, String> = BTreeMap::new();
 	let mut body = String::new();
 
 	// Skip SurrealKit's internal bookkeeping tables (`__entity`, `__rollout`,
 	// …) — they are framework state, not user schema.
 	let tables = doc.tables.iter().filter(|t| !t.name.starts_with("__"));
+
+	// Preload the record Id types
+	for table in tables.clone() {
+		extract_record_id_type(table, &mut imports, &mut record_types);
+	}
+
 	for (idx, table) in tables.enumerate() {
 		if idx > 0 {
 			body.push('\n');
 		}
-		render_table(table, &mut body, &mut imports);
+		render_table(table, &mut body, &mut imports, &mut record_types);
 	}
 
 	let mut out = String::new();
@@ -47,16 +55,40 @@ pub fn to_typescript(doc: &SchemaTypes) -> Result<String> {
 	Ok(out)
 }
 
-fn render_table(table: &TableDef, out: &mut String, imports: &mut BTreeSet<&'static str>) {
+fn extract_record_id_type(
+	table: &TableDef,
+	imports: &mut BTreeSet<&'static str>,
+	record_types: &mut BTreeMap<String, String>,
+) {
+	for field in &table.fields {
+		if field.name == "id" {
+			let ts_type = field_type_to_ts(&field.r#type, imports, record_types);
+			record_types.insert(table.name.clone(), ts_type);
+			return;
+		}
+	}
+}
+
+fn render_table(
+	table: &TableDef,
+	out: &mut String,
+	imports: &mut BTreeSet<&'static str>,
+	record_types: &mut BTreeMap<String, String>,
+) {
 	imports.insert("RecordId");
 	out.push_str(&format!("export interface {} {{\n", pascal_case(&table.name)));
 	// Every record has a typed id. The synthesized field wins over any
 	// introspected `id` field (every record id is a RecordId).
-	out.push_str(&format!("  id: RecordId<'{}'>;\n", table.name));
+	let record_type = record_types.get(&table.name);
+	if record_type.is_none() {
+		out.push_str(&format!("  id: RecordId<'{}'>;\n", table.name));
+	} else {
+		out.push_str(&format!("  id: RecordId<'{}', {}>;\n", table.name, record_type.unwrap()));
+	}
 
 	let tree = build_field_tree(&table.fields);
 	for (name, node) in &tree.children {
-		render_node(name, node, 1, out, imports);
+		render_node(name, node, 1, out, imports, record_types);
 	}
 	out.push_str("}\n");
 }
@@ -135,6 +167,7 @@ fn render_node(
 	depth: usize,
 	out: &mut String,
 	imports: &mut BTreeSet<&'static str>,
+	record_types: &mut BTreeMap<String, String>,
 ) {
 	let indent = "  ".repeat(depth);
 	let optional = if node.own_optional {
@@ -143,11 +176,16 @@ fn render_node(
 		""
 	};
 	let key = format_key(name);
-	let ty = render_node_type(node, depth, imports);
+	let ty = render_node_type(node, depth, imports, record_types);
 	out.push_str(&format!("{indent}{key}{optional}: {ty};\n"));
 }
 
-fn render_node_type(node: &Node, depth: usize, imports: &mut BTreeSet<&'static str>) -> String {
+fn render_node_type(
+	node: &Node,
+	depth: usize,
+	imports: &mut BTreeSet<&'static str>,
+	record_types: &mut BTreeMap<String, String>,
+) -> String {
 	if !node.children.is_empty() {
 		let inner_indent = "  ".repeat(depth + 1);
 		let close_indent = "  ".repeat(depth);
@@ -159,7 +197,7 @@ fn render_node_type(node: &Node, depth: usize, imports: &mut BTreeSet<&'static s
 				""
 			};
 			let key = format_key(name);
-			let ty = render_node_type(child, depth + 1, imports);
+			let ty = render_node_type(child, depth + 1, imports, record_types);
 			obj.push_str(&format!("{inner_indent}{key}{optional}: {ty};\n"));
 		}
 		obj.push_str(&format!("{close_indent}}}"));
@@ -172,9 +210,9 @@ fn render_node_type(node: &Node, depth: usize, imports: &mut BTreeSet<&'static s
 			obj
 		}
 	} else if let Some(ty) = &node.own_type {
-		field_type_to_ts(ty, imports)
+		field_type_to_ts(ty, imports, record_types)
 	} else if let Some(elem) = &node.elem_type {
-		let inner = field_type_to_ts(elem, imports);
+		let inner = field_type_to_ts(elem, imports, record_types);
 		wrap_array(&inner)
 	} else {
 		"unknown".to_string()
@@ -183,7 +221,11 @@ fn render_node_type(node: &Node, depth: usize, imports: &mut BTreeSet<&'static s
 
 /// Map a parsed [`FieldType`] to a TypeScript type expression, recording any
 /// surrealdb SDK symbols that need importing.
-fn field_type_to_ts(ty: &FieldType, imports: &mut BTreeSet<&'static str>) -> String {
+fn field_type_to_ts(
+	ty: &FieldType,
+	imports: &mut BTreeSet<&'static str>,
+	record_types: &mut BTreeMap<String, String>,
+) -> String {
 	match ty {
 		FieldType::Primitive {
 			name,
@@ -191,7 +233,7 @@ fn field_type_to_ts(ty: &FieldType, imports: &mut BTreeSet<&'static str>) -> Str
 		FieldType::Option {
 			inner,
 		} => {
-			format!("{} | undefined", field_type_to_ts(inner, imports))
+			format!("{} | undefined", field_type_to_ts(inner, imports, record_types))
 		}
 		FieldType::Array {
 			inner,
@@ -200,7 +242,7 @@ fn field_type_to_ts(ty: &FieldType, imports: &mut BTreeSet<&'static str>) -> Str
 		| FieldType::Set {
 			inner,
 			..
-		} => wrap_array(&field_type_to_ts(inner, imports)),
+		} => wrap_array(&field_type_to_ts(inner, imports, record_types)),
 		FieldType::Record {
 			tables,
 		} => {
@@ -208,7 +250,19 @@ fn field_type_to_ts(ty: &FieldType, imports: &mut BTreeSet<&'static str>) -> Str
 			if tables.is_empty() {
 				"RecordId".to_string()
 			} else {
-				tables.iter().map(|t| format!("RecordId<'{t}'>")).collect::<Vec<_>>().join(" | ")
+				tables
+					.iter()
+					.map(|t| {
+						let record_type = record_types.get(t);
+						if record_type.is_none() {
+							format!("RecordId<'{t}'>")
+						} else {
+							let unwrapped = record_type.unwrap();
+							format!("RecordId<'{t}', {unwrapped}>")
+						}
+					})
+					.collect::<Vec<_>>()
+					.join(" | ")
 			}
 		}
 		FieldType::Geometry {
@@ -219,10 +273,14 @@ fn field_type_to_ts(ty: &FieldType, imports: &mut BTreeSet<&'static str>) -> Str
 		} => literal_to_ts(value),
 		FieldType::Union {
 			variants,
-		} => variants.iter().map(|v| field_type_to_ts(v, imports)).collect::<Vec<_>>().join(" | "),
+		} => variants
+			.iter()
+			.map(|v| field_type_to_ts(v, imports, record_types))
+			.collect::<Vec<_>>()
+			.join(" | "),
 		FieldType::Object {
 			fields,
-		} => object_to_ts(fields, imports),
+		} => object_to_ts(fields, imports, record_types),
 		FieldType::Unknown {
 			..
 		} => "unknown".to_string(),
@@ -230,7 +288,7 @@ fn field_type_to_ts(ty: &FieldType, imports: &mut BTreeSet<&'static str>) -> Str
 }
 
 fn primitive_to_ts(name: PrimitiveType, imports: &mut BTreeSet<&'static str>) -> String {
-	match name {
+	(match name {
 		PrimitiveType::String => "string",
 		PrimitiveType::Int | PrimitiveType::Float | PrimitiveType::Number => "number",
 		PrimitiveType::Decimal => {
@@ -253,7 +311,7 @@ fn primitive_to_ts(name: PrimitiveType, imports: &mut BTreeSet<&'static str>) ->
 		PrimitiveType::None => "undefined",
 		PrimitiveType::Object => "{ [key: string]: unknown }",
 		PrimitiveType::Function => "unknown",
-	}
+	})
 	.to_string()
 }
 
@@ -282,13 +340,23 @@ fn geometry_to_ts(kinds: &[String], imports: &mut BTreeSet<&'static str>) -> Str
 		.join(" | ")
 }
 
-fn object_to_ts(fields: &[ObjectField], imports: &mut BTreeSet<&'static str>) -> String {
+fn object_to_ts(
+	fields: &[ObjectField],
+	imports: &mut BTreeSet<&'static str>,
+	record_types: &mut BTreeMap<String, String>,
+) -> String {
 	if fields.is_empty() {
 		return "{ [key: string]: unknown }".to_string();
 	}
 	let inner = fields
 		.iter()
-		.map(|f| format!("{}: {}", format_key(&f.name), field_type_to_ts(&f.r#type, imports)))
+		.map(|f| {
+			format!(
+				"{}: {}",
+				format_key(&f.name),
+				field_type_to_ts(&f.r#type, imports, record_types)
+			)
+		})
 		.collect::<Vec<_>>()
 		.join("; ");
 	format!("{{ {inner} }}")
@@ -338,7 +406,9 @@ fn is_valid_identifier(s: &str) -> bool {
 	let mut chars = s.chars();
 	match chars.next() {
 		Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$' => {}
-		_ => return false,
+		_ => {
+			return false;
+		}
 	}
 	chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
 }
@@ -591,10 +661,10 @@ mod tests {
 	}
 
 	#[test]
-	fn introspected_id_field_is_skipped() {
-		let d = doc(vec![table("user", vec![field("id", prim(PrimitiveType::String), false)])]);
+	fn introspected_id_field_is_not_skipped() {
+		let d = doc(vec![table("user", vec![field("id", prim(PrimitiveType::Uuid), false)])]);
 		let ts = to_typescript(&d).unwrap();
-		assert!(ts.contains("id: RecordId<'user'>;"), "got:\n{ts}");
+		assert!(ts.contains("id: RecordId<'user', Uuid>;"), "got:\n{ts}");
 		assert!(!ts.contains("id: string;"), "synthesized id must win, got:\n{ts}");
 	}
 }

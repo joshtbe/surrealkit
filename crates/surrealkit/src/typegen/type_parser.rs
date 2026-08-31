@@ -28,6 +28,9 @@ pub fn extract_type_clause(stmt: &str) -> Option<String> {
 	let mut quote: Option<char> = None;
 	let mut type_start: Option<usize> = None;
 
+	// Flag to see if the "ON" keyword has been passed
+	let mut passed_on: bool = false;
+
 	while i < n {
 		let c = chars[i];
 		if let Some(q) = quote {
@@ -69,10 +72,16 @@ pub fn extract_type_clause(stmt: &str) -> Option<String> {
 					let body: String = chars[start..word_start].iter().collect();
 					return non_empty(body.trim());
 				}
-				None if depth == 0 && upper == "TYPE" => {
+				None if depth == 0 && passed_on && upper == "TYPE" => {
 					type_start = Some(j);
 				}
-				_ => {}
+				_ => {
+					// If the ON keyword has been found, we can now enable the type keyword to be read properly.
+					// This is to prevent columns with a name of "type" from breaking the type generation
+					if !passed_on && upper == "ON" {
+						passed_on = true;
+					}
+				}
 			}
 			i = j;
 			continue;
