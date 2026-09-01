@@ -6,7 +6,7 @@
 //!   per table, every table carrying an `id: RecordId<'table'>`, with field types mapped to SDK
 //!   wrapper types.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::Result;
 
@@ -25,7 +25,7 @@ pub fn to_json(doc: &SchemaTypes, pretty: bool) -> Result<String> {
 pub fn to_typescript(doc: &SchemaTypes) -> Result<String> {
 	let mut imports: BTreeSet<&'static str> = BTreeSet::new();
 	// Map of table names to their record Id types (as a string)
-	let mut record_types: BTreeMap<String, String> = BTreeMap::new();
+	let mut record_types: HashMap<String, String> = HashMap::new();
 	let mut body = String::new();
 
 	// Skip SurrealKit's internal bookkeeping tables (`__entity`, `__rollout`,
@@ -58,7 +58,7 @@ pub fn to_typescript(doc: &SchemaTypes) -> Result<String> {
 fn extract_record_id_type(
 	table: &TableDef,
 	imports: &mut BTreeSet<&'static str>,
-	record_types: &mut BTreeMap<String, String>,
+	record_types: &mut HashMap<String, String>,
 ) {
 	for field in &table.fields {
 		if field.name == "id" {
@@ -73,7 +73,7 @@ fn render_table(
 	table: &TableDef,
 	out: &mut String,
 	imports: &mut BTreeSet<&'static str>,
-	record_types: &mut BTreeMap<String, String>,
+	record_types: &mut HashMap<String, String>,
 ) {
 	imports.insert("RecordId");
 	out.push_str(&format!("export interface {} {{\n", pascal_case(&table.name)));
@@ -167,7 +167,7 @@ fn render_node(
 	depth: usize,
 	out: &mut String,
 	imports: &mut BTreeSet<&'static str>,
-	record_types: &mut BTreeMap<String, String>,
+	record_types: &mut HashMap<String, String>,
 ) {
 	let indent = "  ".repeat(depth);
 	let optional = if node.own_optional {
@@ -184,7 +184,7 @@ fn render_node_type(
 	node: &Node,
 	depth: usize,
 	imports: &mut BTreeSet<&'static str>,
-	record_types: &mut BTreeMap<String, String>,
+	record_types: &mut HashMap<String, String>,
 ) -> String {
 	if !node.children.is_empty() {
 		let inner_indent = "  ".repeat(depth + 1);
@@ -224,7 +224,7 @@ fn render_node_type(
 fn field_type_to_ts(
 	ty: &FieldType,
 	imports: &mut BTreeSet<&'static str>,
-	record_types: &mut BTreeMap<String, String>,
+	record_types: &mut HashMap<String, String>,
 ) -> String {
 	match ty {
 		FieldType::Primitive {
@@ -343,7 +343,7 @@ fn geometry_to_ts(kinds: &[String], imports: &mut BTreeSet<&'static str>) -> Str
 fn object_to_ts(
 	fields: &[ObjectField],
 	imports: &mut BTreeSet<&'static str>,
-	record_types: &mut BTreeMap<String, String>,
+	record_types: &mut HashMap<String, String>,
 ) -> String {
 	if fields.is_empty() {
 		return "{ [key: string]: unknown }".to_string();
