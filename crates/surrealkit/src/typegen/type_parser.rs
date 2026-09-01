@@ -774,4 +774,13 @@ mod tests {
 			Some("record<user | admin>".to_string())
 		);
 	}
+
+	#[test]
+	fn extract_ignores_type_column_name() {
+		// If a column name is called "type", it should be ignored
+		assert_eq!(
+			extract_type_clause("DEFINE FIELD type ON user TYPE 'ADMIN' | 'DEFAULT' | 'GUEST'"),
+			Some("'ADMIN' | 'DEFAULT' | 'GUEST'".to_string())
+		)
+	}
 }
