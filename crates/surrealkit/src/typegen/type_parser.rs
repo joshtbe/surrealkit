@@ -8,6 +8,8 @@
 //! The parser is *total*: anything it does not understand becomes
 //! [`FieldType::Unknown`] rather than panicking or being dropped.
 
+use crate::typegen::ObjectField;
+
 use super::types::{FieldType, PrimitiveType};
 
 /// Clause keywords that terminate the `TYPE` body in a `DEFINE FIELD` statement.
@@ -179,6 +181,7 @@ impl Parser {
 			Some(c) if c == '\'' || c == '"' => self.parse_string_literal(c),
 			Some(c) if c.is_ascii_digit() || c == '-' || c == '+' => self.parse_number_literal(),
 			Some(c) if c.is_ascii_alphabetic() => self.parse_ident_type(),
+			Some(c) if c == '{' => self.parse_object_type(),
 			Some(_) => {
 				let source = self.remaining_trimmed();
 				self.pos = self.chars.len();
@@ -186,6 +189,54 @@ impl Parser {
 					source,
 				}
 			}
+		}
+	}
+
+	fn parse_object_type(&mut self) -> FieldType {
+		//opening braces and skip ws
+		self.pos += 1;
+		self.skip_ws();
+		let mut depth: i32 = 1;
+
+		let mut key_name: Vec<char> = Vec::new();
+		let mut fields: Vec<ObjectField> = Vec::new();
+
+		while let Some(c) = self.peek()
+			&& depth > 0
+		{
+			self.pos += 1;
+			match c {
+				'<' | '(' | '[' | '{' => depth += 1,
+				'>' | ')' | ']' | '}' => {
+					depth -= 1;
+				}
+				':' => {
+					let (ty, is_opt) = unwrap_optional(self.parse_union());
+					let name = String::from_iter(&key_name);
+					let real_type = if is_opt {
+						FieldType::Option {
+							inner: Box::new(ty),
+						}
+					} else {
+						ty
+					};
+					fields.push(ObjectField {
+						name,
+						r#type: real_type,
+					});
+					key_name.clear();
+				}
+				',' => {
+					self.skip_ws();
+				}
+				_ => {
+					key_name.push(c);
+				}
+			}
+		}
+
+		FieldType::Object {
+			fields,
 		}
 	}
 

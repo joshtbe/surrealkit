@@ -10,6 +10,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::Result;
 
+use crate::typegen::type_parser::unwrap_optional;
+
 use super::types::{FieldDef, FieldType, ObjectField, PrimitiveType, SchemaTypes, TableDef};
 
 pub fn to_json(doc: &SchemaTypes, pretty: bool) -> Result<String> {
@@ -351,10 +353,17 @@ fn object_to_ts(
 	let inner = fields
 		.iter()
 		.map(|f| {
+			let (ty, is_opt) = unwrap_optional(f.r#type.clone());
+
 			format!(
-				"{}: {}",
+				"{}{}: {}",
 				format_key(&f.name),
-				field_type_to_ts(&f.r#type, imports, record_types)
+				if is_opt {
+					"?"
+				} else {
+					""
+				},
+				field_type_to_ts(&ty, imports, record_types)
 			)
 		})
 		.collect::<Vec<_>>()
