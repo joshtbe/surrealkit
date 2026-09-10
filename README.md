@@ -283,6 +283,13 @@ make it collect the named module's files and claim ownership of them.
 
 Configure a custom location with `[schema.<name>] path` if you need one.
 
+Before opening any database connection, filesystem sync resolves every selected
+module and refuses if one has no `.surql` sources. This prevents a wrong working
+directory or `--folder` value from becoming setup or prune activity. Use
+`--allow-empty-prune` only when an empty source set is intentional; a selection
+where no module applies to any target remains an error rather than a successful
+no-op.
+
 ### Dependencies
 
 `depends_on` orders application, so a module is never applied before what it
@@ -594,6 +601,9 @@ The runner executes declarative TOML suites from `database/tests/suites/*.toml` 
 - HTTP API endpoint assertions (`api_request`)
 
 By default, each suite runs in an isolated ephemeral namespace/database and fails CI on any test failure.
+The runner performs filesystem sync first, so the same non-empty source preflight
+applies. Use `--no-sync` when the suite's fixtures intentionally own the complete
+schema instead.
 
 ### CLI Flags
 
@@ -659,6 +669,12 @@ expected_status = 200
 path = "0.id"
 exists = true
 ```
+
+An assertion whose `path` (or `header_assertions` `name`) is not present in the result
+**fails** with `path '<path>' not found`. This catches typos and queries that matched
+zero rows, which would otherwise report a pass without ever running the comparison. To
+assert that a field is genuinely absent, state it explicitly with `exists = false` —
+that is the only spec that passes on a missing path.
 
 To compare a returned field against the authenticated actor, use `equals_auth` with `$auth` or `$auth.<property>`:
 

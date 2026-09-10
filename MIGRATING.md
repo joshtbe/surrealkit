@@ -2,10 +2,10 @@
 
 ## If you use the CLI: almost nothing to do
 
-Every 0.7 command still works, and with no new flags every command produces the
-same output against the same files and the same database metadata. Upgrading and
-running `surrealkit sync` on an existing project re-applies nothing and prunes
-nothing.
+Every 0.7 command still works against a valid project. With no new flags it
+produces the same database metadata, apart from the safety refusal for an empty
+filesystem source set described below. Upgrading and running `surrealkit sync`
+on an existing project re-applies nothing and prunes nothing.
 
 Three things do need attention.
 
@@ -46,13 +46,17 @@ always used `SURREALDB_FOLDER` or `./database`. It works now.
 
 If you have been passing `--folder ./db` while SurrealKit was really syncing
 `./database`, it will now sync `./db`. If that directory is empty, SurrealKit
-refuses rather than pruning your schema:
+refuses before opening a database connection:
 
 ```
-refusing to prune all 14 managed entities: no schema files were found in ./db/schema.
+refusing filesystem sync: schema_module=default resolved_schema_dir=./db/schema source_count=0; ...
 ```
 
-Either point `--folder` at the right directory, or drop the flag.
+Either point `--folder` at the right directory, drop the flag, or pass
+`--allow-empty-prune` when the empty source set is intentional. The preflight
+also applies to `--dry-run`, `--no-prune`, and the initial `--watch` sync because
+an empty filesystem selection otherwise cannot distinguish intentional absence
+from a wrong path.
 
 ## Opting into multiple schema modules
 
@@ -116,6 +120,39 @@ surrealkit sync --all --keep-going # don't stop at the first failing target
 Targets are applied one at a time and there is no cross-database transaction, so
 a failing run can leave some targets applied and others not. Every operation is
 idempotent, so re-running after a fix is safe.
+
+## If you use the tester
+
+### Missing paths and headers now fail instead of passing
+
+Through 0.7, an assertion on a JSON path or response header that did **not exist**
+silently passed. The check compared "not found" against an unset `exists` field and
+matched, so the `equals` / `contains` / `regex` comparison was never reached:
+
+```toml
+[[cases.assertions]]
+path = "0.owner"     # typo, or a query that matched zero rows
+equals = "user:alice"
+```
+
+On 0.7 that reported a pass. On 1.0 it fails with `path '0.owner' not found`. The same
+applies to `header_assertions` against a header the response never sent.
+
+**If assertions go red on upgrade, they were most likely never being evaluated.** Check
+the actual shape of the result before assuming SurrealKit regressed — in this repository
+the change surfaced an example suite whose `RELATE` verify query had `in` and `out`
+swapped, matched zero rows, and had been green for the whole 0.7 line.
+
+To assert that something is genuinely absent, say so explicitly:
+
+```toml
+[[cases.assertions]]
+path = "0.secret"
+exists = false
+```
+
+`exists = false` is the only way to pass on a missing path or header; there is no
+suite-level opt-out, and unknown keys in an assertion are rejected at parse time.
 
 ## If you use the Rust library
 
